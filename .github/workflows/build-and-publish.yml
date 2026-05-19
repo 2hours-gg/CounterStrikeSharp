@@ -21,10 +21,10 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
-      gitversion_semver: ${{ steps.gitversion.outputs.semVer }}
-      gitversion_fullsemver: ${{ steps.gitversion.outputs.fullSemVer }}
-      gitversion_assemblysemver: ${{ steps.gitversion.outputs.assemblySemVer }}
-      gitversion_informationalversion: ${{ steps.gitversion.outputs.informationalVersion }}
+      gitversion_semver: ${{ steps.derive.outputs.semver }}
+      gitversion_fullsemver: ${{ steps.derive.outputs.fullsemver }}
+      gitversion_assemblysemver: ${{ steps.derive.outputs.assemblysemver }}
+      gitversion_informationalversion: ${{ steps.derive.outputs.informationalversion }}
     steps:
     - name: Install GitVersion
       uses: gittools/actions/gitversion/setup@v1
@@ -40,6 +40,45 @@ jobs:
       uses: gittools/actions/gitversion/execute@v1
       with:
         useConfigFile: true
+
+    # Fork-specific tags like `v1.0.368-2hours.2` don't match GitVersion's
+    # GitHubFlow release regex, so GitVersion falls back to dev-style
+    # `0.0.1-<branch>` versions. That produces AssemblyVersion 0.0.1.0 ->
+    # Api.GetVersion() returns Build=1, and plugins with
+    # [MinimumApiVersion(N)] for any N>1 refuse to load.
+    #
+    # When the build is triggered by a `v<X>.<Y>.<Z>-2hours.<N>` tag, parse
+    # the components ourselves and override the gitversion outputs with a
+    # proper SemVer / 4-part AssemblyVersion. All other refs pass through
+    # unchanged.
+    - name: Derive final version (handle 2hours suffix tags)
+      id: derive
+      shell: bash
+      run: |
+        SEMVER="${{ steps.gitversion.outputs.semVer }}"
+        FULLSEMVER="${{ steps.gitversion.outputs.fullSemVer }}"
+        ASMVER="${{ steps.gitversion.outputs.assemblySemVer }}"
+        INFVER="${{ steps.gitversion.outputs.informationalVersion }}"
+
+        if [[ "${GITHUB_REF}" =~ ^refs/tags/v([0-9]+)\.([0-9]+)\.([0-9]+)-2hours\.([0-9]+)$ ]]; then
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          SUFFIX="${BASH_REMATCH[4]}"
+          SEMVER="${MAJOR}.${MINOR}.${PATCH}-2hours.${SUFFIX}"
+          FULLSEMVER="${SEMVER}"
+          ASMVER="${MAJOR}.${MINOR}.${PATCH}.${SUFFIX}"
+          INFVER="${SEMVER}+${GITHUB_SHA::7}"
+          echo "Overriding gitversion output for 2hours tag:"
+          echo "  semVer            = ${SEMVER}"
+          echo "  assemblySemVer    = ${ASMVER}"
+          echo "  informationalVer  = ${INFVER}"
+        fi
+
+        echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+        echo "fullsemver=${FULLSEMVER}" >> "$GITHUB_OUTPUT"
+        echo "assemblysemver=${ASMVER}" >> "$GITHUB_OUTPUT"
+        echo "informationalversion=${INFVER}" >> "$GITHUB_OUTPUT"
 
   build_windows:
     needs: setup
